@@ -248,6 +248,7 @@ def test_detached_pass_spares_the_launchers_shell_after_a_clock_step(world):
         wait_until(lambda: not any("hermes_constants_scratch_detach" in " ".join(p.info["cmdline"] or [])
                                    for p in psutil.process_iter(["cmdline"])), timeout=120,
                    what="the detached pass finished")
+    print("DIAG detached-pass log:\n" + world.log())
     assert alive(session.pid), "the launcher's own session was killed by its detached prune"
     assert lane.exists(), "the entry the launcher's session works in was deleted"
     assert not other.exists()
