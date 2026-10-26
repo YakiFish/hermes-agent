@@ -28,6 +28,7 @@ import type { OnboardingTranslations } from './types_onboarding'
 import type { PluginPreviewAccessTranslations } from './types_plugin_preview_access'
 import type { PluginUpdateTranslations } from './types_plugin_update'
 import type { SidebarProjectsTranslations } from './types_projects'
+import type { QueueFairCopy } from './types_queue_fair'
 import type { RightSidebarTranslations } from './types_right_sidebar'
 import type { SharedMetricsTranslations } from './types_shared_metrics'
 import type { ThemePickerCopy } from './types_theme_picker'
@@ -2955,6 +2956,7 @@ catalog: CatalogTranslations
     queueSendNext: string
     queueSend: string
     queueSteer: string
+    queueFair: QueueFairCopy
     queueDelete: string
     queueLostNote: string
     restoreImageDraft: string

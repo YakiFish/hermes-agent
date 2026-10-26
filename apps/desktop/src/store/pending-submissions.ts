@@ -17,6 +17,8 @@ interface PendingSubmission {
   seen?: PendingSnapshotFence
   /** The snapshot's queued-row controls; carried to the card only, never journaled. */
   controls?: string[]
+  /** Why the owner has not started this queued row yet (`hold_reason`); carried to the card only. */
+  holdReason?: string
 }
 
 /** A canonical pending snapshot's place in its session's event order: the replay epoch and the
@@ -196,7 +198,8 @@ function collectReceipts(value: RawReceipts, known: Record<string, PendingSubmis
       id,
       text: typeof raw.user === 'string' ? raw.user : (known[id]?.text ?? ''),
       status: stale ? known[id].status : raw.status,
-      ...(Array.isArray(raw.controls) ? { controls: raw.controls.filter((c: unknown) => typeof c === 'string') } : {})
+      ...(Array.isArray(raw.controls) ? { controls: raw.controls.filter((c: unknown) => typeof c === 'string') } : {}),
+      holdReason: typeof raw.hold_reason === 'string' ? raw.hold_reason : undefined
     })
   }
 
@@ -227,7 +230,13 @@ function projectQueue(
 
     if (receipt) {
       if (receipt.status !== 'started') {
-        next.push({ ...entry, id: receipt.id, serverStatus: receipt.status, serverControls: receipt.controls })
+        next.push({
+          ...entry,
+          id: receipt.id,
+          serverStatus: receipt.status,
+          serverControls: receipt.controls,
+          serverHoldReason: receipt.holdReason
+        })
       }
 
       receipts.delete(receipt.id)
@@ -245,7 +254,8 @@ function projectQueue(
         attachments: [],
         queuedAt: Date.now(),
         serverStatus: receipt.status,
-        serverControls: receipt.controls
+        serverControls: receipt.controls,
+        serverHoldReason: receipt.holdReason
       })
     }
   }

@@ -160,7 +160,7 @@ def test_the_steer_transaction_fences_on_the_queued_row_and_the_running_generati
 
 
 @pytest.mark.asyncio
-async def test_replace_queued_retires_the_old_admission_and_admits_the_edit_at_the_back(tmp_path, monkeypatch):
+async def test_replace_queued_retires_the_old_admission_and_admits_the_edit_in_its_place(tmp_path, monkeypatch):
     db, authority = _authority(tmp_path, monkeypatch)
     interactive(db)
     monkeypatch.setattr(authority, '_schedule', lambda ref: None)
@@ -179,15 +179,15 @@ async def test_replace_queued_retires_the_old_admission_and_admits_the_edit_at_t
         assert (first.admission_id, 'cancelled') in _completions(frames)
         queued = [r for r in list_session_admissions(db, session_id='s') if r['status'] == 'queued']
         assert [(r['request_id'], r['payload']['text']) for r in queued] == [
-            ('second', 'second'), ('first-edited', 'first, edited')], 'the edit must join the back of the FIFO'
+            ('first-edited', 'first, edited'), ('second', 'second')], 'the edit must keep its FIFO place'
 
         # Exact retry: the same new admission, nothing admitted twice; the old id stays cancelled.
         again = await _call(conn, 'prompt.replace_queued', **edit)
         assert again.get('result', {}).get('admission_id') == new_id, again
         old = await _call(conn, 'prompt.cancel', admission_id=first.admission_id)
         assert (old['result']['status'], old['result']['outcome']) == ('terminal', 'cancelled')
-    assert _ledger(db) == [('first', 'terminal', 'cancelled'), ('second', 'queued', None),
-                           ('first-edited', 'queued', None)]
+    assert _ledger(db) == [('first-edited', 'queued', None), ('second', 'queued', None),
+                           ('first', 'terminal', 'cancelled')]
 
 
 @pytest.mark.asyncio
@@ -247,5 +247,5 @@ async def test_pending_rows_name_the_controls_the_owner_serves(tmp_path, monkeyp
         claim_session_input(db, epoch=authority.epoch, session_id='s')
         pending = {row['input_id']: row for row in (asdict(authority._pending_receipt(r))
                                                      for r in authority._pending_rows(REF))}
-    assert pending['follower'].get('controls') == ['steer', 'replace']
+    assert pending['follower'].get('controls') == ['steer', 'replace', 'reorder']
     assert not pending['head'].get('controls'), 'a started row has no queued-row controls'

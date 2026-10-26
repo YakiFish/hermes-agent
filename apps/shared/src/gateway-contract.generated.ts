@@ -5005,8 +5005,9 @@ export interface CanonicalPendingAdmission {
   execution_generation: number | null
   input_id: string
   text: string
-  controls?: ('steer' | 'replace')[] | null
+  controls?: ('steer' | 'replace' | 'reorder')[] | null
   steering?: boolean | null
+  hold_reason?: string | null
 }
 export interface CanonicalPendingPrompt {
   kind: 'approval' | 'clarify'
@@ -5206,7 +5207,7 @@ export interface CanonicalSteerQueuedParams {
   session_id: string
   admission_id: string
 }
-/** The edited prompt: admitted as a NEW admission (``submission_id``) at the FIFO tail. */
+/** The edited prompt: admitted as a NEW admission (``submission_id``) in the FIFO place of the admission it replaces. */
 export interface CanonicalReplaceQueuedParams {
   profile?: string | null
   session_id: string
@@ -5216,6 +5217,21 @@ export interface CanonicalReplaceQueuedParams {
   attachments?: CanonicalAttachment[] | null
   display_kind?: 'hidden' | null
   title_preview?: string | null
+}
+export interface CanonicalHoldQueuedParams {
+  profile?: string | null
+  session_id: string
+  admission_id: string
+  held: boolean
+}
+export interface CanonicalReorderQueuedParams {
+  profile?: string | null
+  session_id: string
+  admission_id: string
+  position: number
+}
+export interface CanonicalReorderQueuedResult {
+  order: string[]
 }
 export interface CanonicalConfigGetResult {
   value?: string | null
@@ -6824,9 +6840,13 @@ export interface CanonicalRpcMethods {
   'profiles.list': { params: CanonicalProfilesParams; result: CanonicalProfilesResult }
   /** Retire a queued admission; a started one is interrupted in the same call. */
   'prompt.cancel': { params: PromptCancelParams; result: AdmissionStatus }
+  /** Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). A hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found. */
+  'prompt.hold_queued': { params: CanonicalHoldQueuedParams; result: AdmissionStatus }
   /** Current receipt of one admission the caller submitted (or controls). */
   'prompt.receipt': { params: PromptReceiptParams; result: PromptReceiptResult }
-  /** Cancel a still-queued admission and admit the edited prompt as a new admission at the back of the FIFO, in one write bound to the replaced admission. Refusals: admission_started, admission_conflict (the submission_id replaced another admission), queue_full, unsupported_control, not_found. */
+  /** Move a still-queued admission to `position` among the session's reorderable queued rows (rows whose controls include 'reorder'); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found. */
+  'prompt.reorder_queued': { params: CanonicalReorderQueuedParams; result: CanonicalReorderQueuedResult }
+  /** Cancel a still-queued admission and admit the edited prompt as a new admission in the replaced admission's FIFO place, in one write bound to the replaced admission; any edit hold on it ends. Refusals: admission_started, admission_conflict (the submission_id replaced another admission), queue_full, unsupported_control, not_found. */
   'prompt.replace_queued': { params: CanonicalReplaceQueuedParams; result: AdmissionStatus }
   /** Acknowledge a turn lost across an owner restart; the FIFO behind it resumes. Never requeues the lost input. */
   'prompt.resolve_unknown': { params: PromptResolveUnknownParams; result: AdmissionStatus }
@@ -6892,7 +6912,9 @@ export const CANONICAL_RPC_METHODS = [
   'kanban.run',
   'profiles.list',
   'prompt.cancel',
+  'prompt.hold_queued',
   'prompt.receipt',
+  'prompt.reorder_queued',
   'prompt.replace_queued',
   'prompt.resolve_unknown',
   'prompt.steer_queued',

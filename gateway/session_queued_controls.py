@@ -1,7 +1,10 @@
-"""Steer and Edit of a still-queued admission: ``prompt.steer_queued`` / ``prompt.replace_queued``.
+"""Steer, Edit and Reorder of a still-queued admission: ``prompt.steer_queued`` /
+``prompt.replace_queued`` (with ``prompt.hold_queued`` while the edit is open) / ``prompt.reorder_queued``.
 
-Both consume the queued row inside one owner write transaction, so it can never also run as its own
-queued turn, and a retry replays the recorded outcome. There is no reorder verb: one FIFO per session.
+Steer and Edit consume the queued row inside one owner write transaction, so it can never also run as
+its own queued turn, and a retry replays the recorded outcome. An edit keeps the row's FIFO place, and
+a held row is never claimed (gateway/session_queue_holds.py). A reorder permutes the places of the
+session's reorderable rows only (``queued_controls``); automation rows keep theirs.
 
 A steer is a TRANSFER to the running claim, not an outcome: the row goes queued -> terminal
 ``steering`` bound to the claim's generation, and settles with that claim (``steered`` once the claim
@@ -14,9 +17,11 @@ import asyncio
 from dataclasses import asdict
 from functools import partial
 
+from gateway.session_queue_holds import set_edit_hold
 from hermes_state_runtime import (
     STEERING, RuntimeStoreError, check_replaced_input, find_session_admission, get_session_admission,
-    replacement_binding, retire_replaced_input, revert_steer_input, steer_replayed, steer_session_input,
+    list_session_admissions, replacement_binding, retire_replaced_input, revert_steer_input, steer_replayed,
+    steer_session_input,
 )
 
 # A steer carries plain text and its presentation only. Attachments, finite runs, classic-CLI turns,
@@ -32,7 +37,9 @@ _INTERACTIVE_SOURCES = frozenset({'cli', 'tui', 'gui', 'desktop', 'acp'})
 
 def handlers(connection):
     return {'prompt.steer_queued': partial(steer_queued, connection),
-            'prompt.replace_queued': partial(replace_queued, connection)}
+            'prompt.replace_queued': partial(replace_queued, connection),
+            'prompt.hold_queued': partial(hold_queued, connection),
+            'prompt.reorder_queued': partial(reorder_queued, connection)}
 
 
 def _interactive(authority, session_id):
@@ -58,7 +65,7 @@ def queued_controls(authority, row):
             or (payload.get('display_v1') or {}).get('kind') == 'hidden'
             or not _interactive(authority, row['target_session_id'])):
         return []
-    return ['steer', 'replace']
+    return ['steer', 'replace', 'reorder']
 
 
 def pending_rows(authority, ref):
@@ -207,8 +214,8 @@ def publish_transfers(authority, ref, generation):
 
 
 async def replace_queued(connection, ref, params):
-    """Cancel the queued admission and admit the edit at the FIFO tail under a new identity, in one
-    write. The replacement is bound to the admission it retired: an exact retry (same old admission,
+    """Cancel the queued admission and admit the edit in its FIFO place under a new identity, in one
+    write (``take_queue_place``), ending any edit hold on it. The replacement is bound to the admission it retired: an exact retry (same old admission,
     same new ``submission_id``) answers the same new admission; any other old admission under that
     ``submission_id`` is ``admission_conflict``, decided inside the admission's own transaction."""
     authority, actor, old_id = connection.authority, connection.actor, params['admission_id']
@@ -225,16 +232,58 @@ async def replace_queued(connection, ref, params):
     elif (receipt.status, receipt.outcome) != ('terminal', 'cancelled'):
         raise RuntimeStoreError('admission_conflict')  # that request id names other work
     binding = replacement_binding(actor.subject, ref.session_id, request.request_id)
+    from hermes_state_runtime_queue import take_queue_place
     try:
         admitted = await authority.submit(actor, request, queue_while_restarting=connection._operator is True,
                                           _authorize_write=partial(retire_replaced_input, admission_id=old_id, binding=binding),
-                                          _replay_guard=partial(check_replaced_input, admission_id=old_id, binding=binding))
+                                          _replay_guard=partial(check_replaced_input, admission_id=old_id, binding=binding),
+                                          _after_insert=lambda conn, row: take_queue_place(conn, row, old_id))
     finally:
         old = get_session_admission(authority.db, admission_id=old_id)
         if old_id in authority.cancel_obligations and (old['status'], old['outcome']) == ('terminal', 'cancelled'):
             authority._settle_cancelled(ref, old_id)
         elif old['status'] == 'queued':
             authority.cancel_obligations.discard(old_id)  # refused: nothing committed
+        if old['status'] != 'queued':
+            set_edit_hold(authority, old_id, False)
     from gateway.session_ingress_media import release_admission_media
     await asyncio.to_thread(release_admission_media, authority.db, old_id)
     return asdict(admitted)
+
+
+async def _reorderable(connection, ref, admission_id, verb):
+    """The row's receipt once it is still queued and serves ``verb``; the named refusal otherwise."""
+    connection.authority.authorize(connection.actor, ref, 'session:control')
+    receipt, row = await _queued(connection, ref, admission_id)
+    if receipt.status != 'queued':
+        raise RuntimeStoreError('admission_started')
+    if verb not in queued_controls(connection.authority, row):
+        raise RuntimeStoreError('unsupported_control')
+    return receipt
+
+
+async def hold_queued(connection, ref, params):
+    """Hold a queued admission while a client edits it (``held``), or release it. The drain parks on
+    a held head (it never starts mid-edit); the hold lapses after ``EDIT_HOLD_S``."""
+    authority, admission_id = connection.authority, params['admission_id']
+    receipt = await _reorderable(connection, ref, admission_id, 'replace')
+    set_edit_hold(authority, admission_id, params.get('held') is True)
+    authority._publish_pending(ref)
+    if params.get('held') is not True:
+        authority._schedule(ref)  # a drain parked on this head claims it now
+    return asdict(receipt)
+
+
+async def reorder_queued(connection, ref, params):
+    """Move a queued admission to ``position`` among the session's reorderable queued rows."""
+    authority, admission_id = connection.authority, params['admission_id']
+    await _reorderable(connection, ref, admission_id, 'reorder')
+    rows = await asyncio.to_thread(list_session_admissions, authority.db, session_id=ref.session_id)
+    movable = [row['admission_id'] for row in rows if 'reorder' in queued_controls(authority, row)]
+    from gateway.session_runtime_workers import tracked_write
+    from hermes_state_runtime_queue import reorder_queued_input
+    order = await tracked_write(authority, partial(
+        reorder_queued_input, authority.db, epoch=authority.epoch, session_id=ref.session_id,
+        admission_id=admission_id, position=params['position'], movable=movable))
+    authority._publish_pending(ref)
+    return {'order': order}

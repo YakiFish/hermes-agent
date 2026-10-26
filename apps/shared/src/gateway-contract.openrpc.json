@@ -8733,6 +8733,42 @@
         "title": "CanonicalEventsResult",
         "type": "object"
       },
+      "CanonicalHoldQueuedParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "held": {
+            "title": "Held",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "session_id",
+          "admission_id",
+          "held"
+        ],
+        "title": "CanonicalHoldQueuedParams",
+        "type": "object"
+      },
       "CanonicalListParams": {
         "additionalProperties": false,
         "properties": {
@@ -8911,7 +8947,8 @@
                 "items": {
                   "enum": [
                     "steer",
-                    "replace"
+                    "replace",
+                    "reorder"
                   ],
                   "type": "string"
                 },
@@ -8935,6 +8972,18 @@
             ],
             "default": null,
             "title": "Steering"
+          },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hold Reason"
           }
         },
         "required": [
@@ -9239,9 +9288,62 @@
         "title": "CanonicalProfilesResult",
         "type": "object"
       },
+      "CanonicalReorderQueuedParams": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "admission_id": {
+            "title": "Admission Id",
+            "type": "string"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "admission_id",
+          "position"
+        ],
+        "title": "CanonicalReorderQueuedParams",
+        "type": "object"
+      },
+      "CanonicalReorderQueuedResult": {
+        "additionalProperties": false,
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order"
+        ],
+        "title": "CanonicalReorderQueuedResult",
+        "type": "object"
+      },
       "CanonicalReplaceQueuedParams": {
         "additionalProperties": false,
-        "description": "The edited prompt: admitted as a NEW admission (``submission_id``) at the FIFO tail.",
+        "description": "The edited prompt: admitted as a NEW admission (``submission_id``) in the FIFO place of the\nadmission it replaces.",
         "properties": {
           "profile": {
             "anyOf": [
@@ -47883,6 +47985,24 @@
       }
     },
     {
+      "name": "prompt.hold_queued",
+      "summary": "Hold (held=true) or release a still-queued admission while a client edits it: the drain does not start a held admission (pending snapshots say hold_reason 'editing'). A hold lapses after 120 s unless renewed; prompt.replace_queued and prompt.cancel end it. Refusals: admission_started, unsupported_control, not_found.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CanonicalHoldQueuedParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AdmissionStatus"
+        }
+      }
+    },
+    {
       "name": "prompt.receipt",
       "summary": "Current receipt of one admission the caller submitted (or controls).",
       "params": [
@@ -47901,8 +48021,26 @@
       }
     },
     {
+      "name": "prompt.reorder_queued",
+      "summary": "Move a still-queued admission to `position` among the session's reorderable queued rows (rows whose controls include 'reorder'); other rows keep their places. Refusals: admission_started, unsupported_control, invalid_params, not_found.",
+      "params": [
+        {
+          "name": "params",
+          "schema": {
+            "$ref": "#/components/schemas/CanonicalReorderQueuedParams"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalReorderQueuedResult"
+        }
+      }
+    },
+    {
       "name": "prompt.replace_queued",
-      "summary": "Cancel a still-queued admission and admit the edited prompt as a new admission at the back of the FIFO, in one write bound to the replaced admission. Refusals: admission_started, admission_conflict (the submission_id replaced another admission), queue_full, unsupported_control, not_found.",
+      "summary": "Cancel a still-queued admission and admit the edited prompt as a new admission in the replaced admission's FIFO place, in one write bound to the replaced admission; any edit hold on it ends. Refusals: admission_started, admission_conflict (the submission_id replaced another admission), queue_full, unsupported_control, not_found.",
       "params": [
         {
           "name": "params",
