@@ -59,6 +59,28 @@ jobs:
           test-environment: 'true'
           prune-python-cache: true
 
+      - name: TEMP scratch owner-lock live E2E (wine2e only, never merges)
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set +e
+          bash scripts/run_tests.sh tests/test_scratch_lock_windows_live.py -- -m "platforms and integration" -v -rA --junitxml="$RUNNER_TEMP/scratch-live.xml"
+          rc1=$?
+          bash scripts/run_tests.sh tests/test_scratch_owner_lock.py -- -v -rA --junitxml="$RUNNER_TEMP/scratch-unit.xml"
+          rc2=$?
+          bash scripts/run_tests.sh tests/test_scratch_dir.py -- -v -rA --junitxml="$RUNNER_TEMP/scratch-dir.xml"
+          rc3=$?
+          exit $((rc1 | rc2 | rc3))
+
+      - name: TEMP upload scratch owner-lock junit
+        if: ${{ always() }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: scratch-owner-lock-junit
+          path: ${{ runner.temp }}/scratch-*.xml
+          if-no-files-found: warn
+
       - name: Run venv-holder live E2E
         # Canonical runner (scripts/run_tests.sh) — never bare pytest: it
         # enforces credential hygiene, TZ, temp HERMES_HOME and subprocess
